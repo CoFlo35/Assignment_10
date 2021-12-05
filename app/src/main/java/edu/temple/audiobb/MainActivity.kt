@@ -48,7 +48,7 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     lateinit var downloadManager :DownloadManager
     lateinit var request : DownloadManager.Request
     lateinit var bookProgress:PlayerService.BookProgress
-    private lateinit var jsonArray: JSONArray
+    private var jsonArray: JSONArray = JSONArray()
 
     var queueID:Long = 0
 
@@ -100,6 +100,16 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
         it.data?.run {
             bookListViewModel.copyBooks(getSerializableExtra(BookList.BOOKLIST_KEY) as BookList)
             bookListFragment.bookListUpdated()
+            jsonArray = SearchActivity.getJSONArray()
+
+            with(preferences.edit()) {
+                //jsonArray = SearchActivity.getJSONArray()
+                Log.d("sharedPref", "Array Retured as " + jsonArray.toString())
+                putString("bookList", jsonArray.toString())
+                    //Log.d("sharedPref", "On Destroy, List is: " + preferences.getString("bookList", "").toString())
+                    .apply()
+            }
+
         }
 
     }
@@ -110,8 +120,8 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
             mediaControlBinder.setProgressHandler(audiobookHandler)
             connected = true
             if(preferences != null){
-               // Log.d("sharedPref", "The book id is: "+preferences.getInt("bookID", 0).toString())
-                //Log.d("sharedPref", "The book progress is: "+preferences.getInt("bookProgress", 0).toString())
+                //Log.d("sharedPref", "The book id is: "+preferences.getInt("bookID", 0).toString())
+               //Log.d("sharedPref", "The book progress is: "+preferences.getInt("bookProgress", 0).toString())
                 val bookID = preferences.getInt("bookID", 0)
                 val bookProgress = preferences.getInt("bookProgress", 0)
                 val loadedJson = preferences.getString("bookList", "")
@@ -125,10 +135,12 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
 
 //                Log.d("bookList", )
                 if(bookID != 0){
-
+                    var book = bookListViewModel.getBookById(bookID)
+                    selectedBookViewModel.setSelectedBook(book)
+                    bookSelected()
                     //Log.d("sharedPref", "the book Exists")
-                    mediaControlBinder.play(bookID)
-                    mediaControlBinder.seekTo(bookProgress)
+                    //mediaControlBinder.play(bookID)
+                    //mediaControlBinder.seekTo(bookProgress)
                 }
             //mediaControlBinder.seekTo(preferences.getInt("bookProgress",0))
             }
@@ -245,6 +257,14 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     override fun onBackPressed() {
         // Backpress clears the selected book
         selectedBookViewModel.setSelectedBook(null)
+
+        with(preferences.edit()){
+            putInt("bookID", 0)
+            putInt("bookProgress", 0)
+            commit()
+        }
+        //mediaControlBinder.seekTo(0)
+
         super.onBackPressed()
     }
 
@@ -252,7 +272,8 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
         // Perform a fragment replacement if we only have a single container
         // when a book is selected
 
-        if (isSingleContainer) {
+
+        if (isSingleContainer && selectedBookViewModel.getSelectedBook().value != null) {
             supportFragmentManager.beginTransaction()
                 .replace(R.id.container1, BookDetailsFragment())
                 .setReorderingAllowed(true)
@@ -289,29 +310,27 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         Log.d("sharedPref", "killing app")
-        if(isFinishing && mediaControlBinder.isPlaying) {
+        Log.d("sharedPref", "App Finishing?: " + isFinishing )
+        Log.d("sharedPref", "Media playing?: " + mediaControlBinder.isPlaying)
 
+
+        if(isFinishing && mediaControlBinder.isPlaying) {
             mediaControlBinder.stop()
-            with(preferences.edit()){
+            with(preferences.edit()) {
                 putInt("bookID", bookProgress.bookId)
                 putInt("bookProgress", bookProgress.progress)
                 commit()
             }
 
-        }else{
-            with(preferences.edit()) {
-                jsonArray = SearchActivity.getJSONArray()
-                putString("bookList", jsonArray.toString())
-                commit()
-            }
-            Log.d("sharedPref", "The Json Array String: " + jsonArray.toString())
+        }
             //Log.d("sharedPref", "Closing book id is: " + bookProgress.bookId.toString())
             //Log.d("sharedPref", "Closing book progress is: " + bookProgress.progress.toString())
 
-        }
 
+        Log.d("sharedPref", "The Json Array String: " + jsonArray.toString())
+
+        super.onDestroy()
         unbindService(serviceConnection)
 
 

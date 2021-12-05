@@ -1,5 +1,6 @@
 package edu.temple.audiobb
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import org.json.JSONArray
 import java.io.Serializable
@@ -37,4 +38,16 @@ class BookList : ViewModel(), Serializable{
 
     fun size() = bookList.size
 
+    fun getBookById(id:Int):Book? {
+        for (i in 0 until bookList.size) {
+            var book = bookList[i]
+            if (book.id == id) {
+                Log.d("bookList search", "we found a match")
+                return book
+
+            }
+
+        }
+        return null
+    }
 }

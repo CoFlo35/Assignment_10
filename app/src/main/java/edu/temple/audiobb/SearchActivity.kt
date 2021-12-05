@@ -31,7 +31,6 @@ class SearchActivity : AppCompatActivity() {
                             populateBooks(it)
 
 
-
                         })
                     )
                     finish()
