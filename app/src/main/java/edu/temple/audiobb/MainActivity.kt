@@ -124,32 +124,40 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
 
     private val serviceConnection = object: ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            //cast the PlayerService.MediaControlBinder to its reference
             mediaControlBinder = service as PlayerService.MediaControlBinder
+            //set the handler
             mediaControlBinder.setProgressHandler(audiobookHandler)
 
 
             connected = true
+            //check the shared preferences
             if(preferences != null){
                 //Log.d("sharedPref", "The book id is: "+preferences.getInt("bookID", 0).toString())
                //Log.d("sharedPref", "The book progress is: "+preferences.getInt("bookProgress", 0).toString())
+                //retrieve the bookID and currentProgress of book playing before app was killed
                 val bookID = preferences.getInt("bookID", 0)
                 currentProgress = preferences.getInt("bookProgress", 0)
+                //retrieve the last known list of books from preferences
                 val loadedJson = preferences.getString("bookList", "")
                // Log.d("sharedPref", preferences.getString("bookList", "").toString())
                 if(loadedJson != ""){
+                    //turn stringified JSONArray back into a JSONArray
                     var arry = JSONArray(loadedJson)
+                    //populate the bookList and update the BookList Fragment
                     bookListViewModel.populateBooks(arry)
                     bookListFragment.bookListUpdated()
 
                 }
-
-//
+                //if book is 0 then there is no last playing book, otherwise
+                //retrieve the book from the viewModel
                 if(bookID != 0){
                     var book = bookListViewModel.getBookById(bookID)
                     selectedBookViewModel.setSelectedBook(book)
                     bookSelected()
                     playingBookViewModel.setPlayingBook(selectedBookViewModel.getSelectedBook().value)
                     //mediaControlBinder.play(selectedBookViewModel.getSelectedBook().value!!.id)
+                    //return the seekBar back to its last known position and start the book from there
                     supportFragmentManager.findFragmentById(R.id.controlFragmentContainerView)?.run{
                         with (this as ControlFragment) {
                             playingBookViewModel.getPlayingBook().value?.also {
@@ -159,14 +167,8 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
                     }
                     play()
 
-                    //mediaControlBinder.seekTo(currentProgress)
-
-
-                    //Log.d("sharedPref", "the book Exists")
-                    //mediaControlBinder.play(bookID)
-                    //mediaControlBinder.seekTo(bookProgress)
                 }
-            //mediaControlBinder.seekTo(preferences.getInt("bookProgress",0))
+
             }
         }
 
@@ -174,16 +176,6 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
             connected = false
         }
 
-    }
-
-    private val okClient by lazy{
-        OkHttpClient()
-    }
-
-    private val okRequest by lazy{
-        okhttp3.Request.Builder()
-            .url("https://www.istockphoto.com/photo/skyline-of-downtown-philadelphia-at-sunset-gm913241978-251392262")
-            .build()
     }
 
     private val isSingleContainer : Boolean by lazy{
@@ -286,12 +278,12 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
         // Backpress clears the selected book
         selectedBookViewModel.setSelectedBook(null)
 
-        with(preferences.edit()){
-            putInt("bookID", 0)
-            putInt("bookProgress", 0)
-            commit()
-        }
-        //mediaControlBinder.seekTo(0)
+//        with(preferences.edit()){
+//            putInt("bookID", 0)
+//            putInt("bookProgress", 0)
+//            commit()
+//        }
+
 
         super.onBackPressed()
     }
@@ -299,8 +291,6 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     override fun bookSelected() {
         // Perform a fragment replacement if we only have a single container
         // when a book is selected
-
-
         if (isSingleContainer && selectedBookViewModel.getSelectedBook().value != null) {
             supportFragmentManager.beginTransaction()
                 .replace(R.id.container1, BookDetailsFragment())
@@ -311,7 +301,20 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     }
 
     override fun play() {
-        thread.start()
+
+        var downloadRunnable = DownloadRunnable();
+        var thd =  Thread(downloadRunnable);
+        thd.start()
+
+
+        thd.join(); // wait for run to end
+
+        // restart the runnable
+        thd =  Thread(downloadRunnable);
+        thd.start();
+
+        //check if there is a book selected and a service bound, set the selected book to playing book
+        //start the service
         if (connected && selectedBookViewModel.getSelectedBook().value != null) {
             Log.d("Button pressed", "Play button")
             Log.d("HowPlayed", "Streaming Book")
@@ -325,11 +328,13 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
             }
         }
 
-        Thread.sleep(5000)
+        Thread.sleep(3000)
         checkCurrentProgress(currentProgress)
 
     }
 
+    //helper function to return the seekbar to previous state before the
+    //app was killed
     fun checkCurrentProgress(_currentProgress:Int){
         mediaControlBinder.seekTo(_currentProgress)
 
@@ -338,24 +343,30 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     override fun pause() {
         if (connected)
             currentProgress = bookProgress.progress
-//            with(preferences.edit()) {
-//                putInt("bookID", bookProgress.bookId)
-//                putInt("bookProgress", bookProgress.progress)
-//                    .apply()
-//
-//            }
+            //save the current progress of the playing book
+            with(preferences.edit()) {
+                putInt("bookProgress", bookProgress.progress)
+                    .apply()
+
+            }
         mediaControlBinder.pause()
     }
 
     override fun stop() {
         if (connected) {
+            //set the shared preferences to 0
+            //so we skip the loading stage upon restart if app is killed
             with(preferences.edit()) {
                 putInt("bookID", 0)
                 putInt("bookProgress", 0)
                     .apply()
             }
+            //remove the title of currently playing book
             ControlFragment.setNowPlaying("")
+            //set the current progress of the book to 0
             currentProgress = 0
+
+            //move the seekbar back to position of 0
             supportFragmentManager.findFragmentById(R.id.controlFragmentContainerView)?.run{
                 with (this as ControlFragment) {
                     playingBookViewModel.getPlayingBook().value?.also {
@@ -377,88 +388,88 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     }
 
     override fun onDestroy() {
-        Log.d("sharedPref", "killing app")
+
         Log.d("sharedPref", "App Finishing?: " + isFinishing )
         Log.d("sharedPref", "Media playing?: " + mediaControlBinder.isPlaying)
 
-
+        //check if orientation has changed or the app is being killed
+        //if the app is being killed then check if a book is playing
         if(isFinishing && mediaControlBinder.isPlaying) {
+            //if a book is playing, stop the audio
             mediaControlBinder.stop()
+            //take the book id and current progress and save it to be used when the app is
+            //restarted
             with(preferences.edit()) {
-                if(downloadArray.size() > 0){
-                    putString("array",downloadArray.toString())
-                }
+
                 putInt("bookID", bookProgress.bookId)
                 putInt("bookProgress", bookProgress.progress)
                 commit()
-                Log.d("sharedPref", "Closing book id is: " + bookProgress.bookId.toString())
-                Log.d("sharedPref", "Closing book progress is: " + bookProgress.progress.toString())
+               // Log.d("sharedPref", "Closing book id is: " + bookProgress.bookId.toString())
+                //Log.d("sharedPref", "Closing book progress is: " + bookProgress.progress.toString())
 
             }
 
         }
+        //call super function
         super.onDestroy()
+        //unbind the service
         unbindService(serviceConnection)
 
     }
 
-    fun checkDownloads(bookID:Int):Int{
-        if(downloadArray.contains(bookID)){
-            return downloadArray[bookID]
+    inner class DownloadRunnable: Runnable{
+        override fun run() {
+
+            var uri = ("https://kamorris.com/lab/audlib/download.php?id=${selectedBookViewModel.getSelectedBook().value!!.id}")
+
+            var totalSize = 0
+            var downloadedSize = 0
+
+            val url = URL(uri)
+            val urlConnection = url
+                .openConnection() as HttpURLConnection
+
+            urlConnection.requestMethod = "POST"
+            urlConnection.doOutput = true
+
+            // connect
+            urlConnection.connect()
+            //Toast.makeText(this, "Download Starting", Toast.LENGTH_LONG).show()
+
+            val myDir: File
+            myDir = File(filesDir, "${selectedBookViewModel.getSelectedBook().value!!.id}")
+            myDir.mkdirs()
+
+            // create a new file, to save the downloaded file
+            val mFileName: String = "${selectedBookViewModel.getSelectedBook().value!!.id}"
+            val file = File(myDir, mFileName)
+
+            val fileOutput = FileOutputStream(file)
+
+            // Stream used for reading the data from the internet
+            val inputStream = urlConnection.inputStream
+
+            // this is the total size of the file which we are downloading
+            totalSize = urlConnection.contentLength
+
+            // create a buffer...
+            val buffer = ByteArray(1024)
+            var bufferLength = 0
+
+            while (inputStream.read(buffer).also { bufferLength = it } > 0) {
+                fileOutput.write(buffer, 0, bufferLength)
+                downloadedSize += bufferLength
+                // update the progressbar //
+
+            }
+            // close the output stream when complete //
+            fileOutput.close()
+            //Toast.makeText(this, "Download Complete", Toast.LENGTH_LONG).show()
         }
-        else{
-            return -1
-        }
+
+
     }
 
-    var thread = Thread(Runnable {
-        var uri = ("https://kamorris.com/lab/audlib/download.php?id=${selectedBookViewModel.getSelectedBook().value!!.id}")
-
-        var totalSize = 0
-        var downloadedSize = 0
-
-        val url = URL(uri)
-        val urlConnection = url
-            .openConnection() as HttpURLConnection
-
-        urlConnection.requestMethod = "POST"
-        urlConnection.doOutput = true
-
-        // connect
-        urlConnection.connect()
-        //Toast.makeText(this, "Download Starting", Toast.LENGTH_LONG).show()
-
-        val myDir: File
-        myDir = File(filesDir, "${selectedBookViewModel.getSelectedBook().value!!.id}")
-        myDir.mkdirs()
-
-        // create a new file, to save the downloaded file
-        val mFileName: String = "${selectedBookViewModel.getSelectedBook().value!!.id}"
-        val file = File(myDir, mFileName)
-
-        val fileOutput = FileOutputStream(file)
-
-        // Stream used for reading the data from the internet
-        val inputStream = urlConnection.inputStream
-
-        // this is the total size of the file which we are downloading
-        totalSize = urlConnection.contentLength
-
-        // create a buffer...
-        val buffer = ByteArray(1024)
-        var bufferLength = 0
-
-        while (inputStream.read(buffer).also { bufferLength = it } > 0) {
-            fileOutput.write(buffer, 0, bufferLength)
-            downloadedSize += bufferLength
-            // update the progressbar //
-
-        }
-        // close the output stream when complete //
-        fileOutput.close()
-        //Toast.makeText(this, "Download Complete", Toast.LENGTH_LONG).show()
-
-    })
 
 
 }
