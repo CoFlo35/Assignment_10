@@ -25,12 +25,16 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Response
-import java.io.File
-import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import android.os.Environment
+import android.provider.MediaStore
+import android.service.controls.Control
+import okio.BufferedSink
+import okio.buffer
+import okio.sink
 import org.json.JSONArray
+import java.io.*
 import java.util.*
 
 
@@ -49,6 +53,9 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     lateinit var request : DownloadManager.Request
     lateinit var bookProgress:PlayerService.BookProgress
     private var jsonArray: JSONArray = JSONArray()
+    var currentProgress = 0
+    var bookProg = 0
+
 
     var queueID:Long = 0
 
@@ -59,6 +66,8 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
         // obj (BookProgress object) may be null if playback is paused
         msg.obj?.let { msgObj ->
             bookProgress = msgObj as PlayerService.BookProgress
+            //Log.d("progressRestart", "The book Progress is: " + bookProgress.progress.toString())
+            bookProg = bookProgress.progress
             // If the service is playing a book but the activity doesn't know about it
             // (this would happen if the activity was closed and then reopened) then
             // fetch the book details so the activity can be properly updated
@@ -91,7 +100,6 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
                 }
             }
         }
-
         true
     }
 
@@ -118,26 +126,42 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             mediaControlBinder = service as PlayerService.MediaControlBinder
             mediaControlBinder.setProgressHandler(audiobookHandler)
+
+
             connected = true
             if(preferences != null){
                 //Log.d("sharedPref", "The book id is: "+preferences.getInt("bookID", 0).toString())
                //Log.d("sharedPref", "The book progress is: "+preferences.getInt("bookProgress", 0).toString())
                 val bookID = preferences.getInt("bookID", 0)
-                val bookProgress = preferences.getInt("bookProgress", 0)
+                currentProgress = preferences.getInt("bookProgress", 0)
                 val loadedJson = preferences.getString("bookList", "")
-                Log.d("sharedPref", preferences.getString("bookList", "").toString())
+               // Log.d("sharedPref", preferences.getString("bookList", "").toString())
                 if(loadedJson != ""){
                     var arry = JSONArray(loadedJson)
                     bookListViewModel.populateBooks(arry)
                     bookListFragment.bookListUpdated()
-                    //Log.d("sharedPref", arry.toString())
+
                 }
 
-//                Log.d("bookList", )
+//
                 if(bookID != 0){
                     var book = bookListViewModel.getBookById(bookID)
                     selectedBookViewModel.setSelectedBook(book)
                     bookSelected()
+                    playingBookViewModel.setPlayingBook(selectedBookViewModel.getSelectedBook().value)
+                    //mediaControlBinder.play(selectedBookViewModel.getSelectedBook().value!!.id)
+                    supportFragmentManager.findFragmentById(R.id.controlFragmentContainerView)?.run{
+                        with (this as ControlFragment) {
+                            playingBookViewModel.getPlayingBook().value?.also {
+                                setPlayProgress(((currentProgress / it.duration.toFloat()) * 100).toInt())
+                            }
+                        }
+                    }
+                    play()
+
+                    //mediaControlBinder.seekTo(currentProgress)
+
+
                     //Log.d("sharedPref", "the book Exists")
                     //mediaControlBinder.play(bookID)
                     //mediaControlBinder.seekTo(bookProgress)
@@ -206,8 +230,10 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
 
 
         playingBookViewModel.getPlayingBook().observe(this, {
-            (supportFragmentManager.findFragmentById(R.id.controlFragmentContainerView) as ControlFragment).setNowPlaying(it.title)
-        })
+            if(it != null) {
+                (supportFragmentManager.findFragmentById(R.id.controlFragmentContainerView)
+                        as ControlFragment).setNowPlaying(it.title)
+            }})
 
         // Create intent for binding and starting service
         serviceIntent = Intent(this, PlayerService::class.java)
@@ -252,6 +278,8 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
             searchRequest.launch(Intent(this, SearchActivity::class.java))
         }
 
+
+
     }
 
     override fun onBackPressed() {
@@ -283,7 +311,7 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     }
 
     override fun play() {
-        //downloadAudio(3)
+        thread.start()
         if (connected && selectedBookViewModel.getSelectedBook().value != null) {
             Log.d("Button pressed", "Play button")
             Log.d("HowPlayed", "Streaming Book")
@@ -291,14 +319,52 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
             playingBookViewModel.setPlayingBook(selectedBookViewModel.getSelectedBook().value)
             startService(serviceIntent)
         }
+        if(this::mediaControlBinder.isInitialized){
+            if(mediaControlBinder.isPlaying){
+                downloadArray.append(selectedBookViewModel.getSelectedBook().value!!.id, bookProg)
+            }
+        }
+
+        Thread.sleep(5000)
+        checkCurrentProgress(currentProgress)
+
+    }
+
+    fun checkCurrentProgress(_currentProgress:Int){
+        mediaControlBinder.seekTo(_currentProgress)
+
     }
 
     override fun pause() {
-        if (connected) mediaControlBinder.pause()
+        if (connected)
+            currentProgress = bookProgress.progress
+//            with(preferences.edit()) {
+//                putInt("bookID", bookProgress.bookId)
+//                putInt("bookProgress", bookProgress.progress)
+//                    .apply()
+//
+//            }
+        mediaControlBinder.pause()
     }
 
     override fun stop() {
         if (connected) {
+            with(preferences.edit()) {
+                putInt("bookID", 0)
+                putInt("bookProgress", 0)
+                    .apply()
+            }
+            ControlFragment.setNowPlaying("")
+            currentProgress = 0
+            supportFragmentManager.findFragmentById(R.id.controlFragmentContainerView)?.run{
+                with (this as ControlFragment) {
+                    playingBookViewModel.getPlayingBook().value?.also {
+                        setPlayProgress(((0).toInt()))
+                    }
+                }
+            }
+
+
             mediaControlBinder.stop()
             stopService(serviceIntent)
         }
@@ -307,6 +373,7 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
     override fun seek(position: Int) {
         // Converting percentage to proper book progress
         if (connected && mediaControlBinder.isPlaying) mediaControlBinder.seekTo((playingBookViewModel.getPlayingBook().value!!.duration * (position.toFloat() / 100)).toInt())
+
     }
 
     override fun onDestroy() {
@@ -318,23 +385,20 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
         if(isFinishing && mediaControlBinder.isPlaying) {
             mediaControlBinder.stop()
             with(preferences.edit()) {
+                if(downloadArray.size() > 0){
+                    putString("array",downloadArray.toString())
+                }
                 putInt("bookID", bookProgress.bookId)
                 putInt("bookProgress", bookProgress.progress)
                 commit()
+                Log.d("sharedPref", "Closing book id is: " + bookProgress.bookId.toString())
+                Log.d("sharedPref", "Closing book progress is: " + bookProgress.progress.toString())
+
             }
 
         }
-            //Log.d("sharedPref", "Closing book id is: " + bookProgress.bookId.toString())
-            //Log.d("sharedPref", "Closing book progress is: " + bookProgress.progress.toString())
-
-
-        Log.d("sharedPref", "The Json Array String: " + jsonArray.toString())
-
         super.onDestroy()
         unbindService(serviceConnection)
-
-
-
 
     }
 
@@ -347,128 +411,54 @@ class MainActivity : AppCompatActivity(), BookListFragment.BookSelectedInterface
         }
     }
 
-    fun downloadAudio(bookID: Int){
+    var thread = Thread(Runnable {
+        var uri = ("https://kamorris.com/lab/audlib/download.php?id=${selectedBookViewModel.getSelectedBook().value!!.id}")
 
-        //var uri = Uri.parse("https://kamorris.com/lab/audlib/download.php?id=3")
-        var uri = Uri.parse("https://www.youtube.com/watch?v=c-SDbITS_R4")
+        var totalSize = 0
+        var downloadedSize = 0
 
-//
-//        var request = DownloadManager.Request(uri)
-//
-//        var title = URLUtil.guessFileName(uri.toString(), null,null)
-//        request.setTitle(title)
-//        request.setDescription("Downloading Book.....")
-//        var cookie = CookieManager.getInstance().getCookie(uri.toString())
-//        request.addRequestHeader("cookie", cookie)
-//        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-//        //request.setDestinationInExternalFilesDir(Environment.DIRECTORY_DOWNLOADS, title.toString())
-//
-//        downloadManager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-//        downloadManager.enqueue(request)
-//
-//
+        val url = URL(uri)
+        val urlConnection = url
+            .openConnection() as HttpURLConnection
 
-//
-//        downloadManager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-//        val uri =
-//            Uri.parse("https://kamorris.com/lab/audlib/download.php?id=3")
-//        val request = DownloadManager.Request(uri) as DownloadManager.Request
-//        request.setTitle(bookID.toString())
-//        request.setDescription("Downloading File")
-//        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-//        queueID = downloadManager.enqueue(request)
+        urlConnection.requestMethod = "POST"
+        urlConnection.doOutput = true
 
-        //var uri  = Uri.parse("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3")
+        // connect
+        urlConnection.connect()
+        //Toast.makeText(this, "Download Starting", Toast.LENGTH_LONG).show()
 
+        val myDir: File
+        myDir = File(filesDir, "${selectedBookViewModel.getSelectedBook().value!!.id}")
+        myDir.mkdirs()
 
-        downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        var request = DownloadManager.Request(uri) as DownloadManager.Request
-        request.setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
-        request.setTitle("DownloadingBook")
-        request.setDescription("Downloading File")
-        request.allowScanningByMediaScanner()
-        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        // create a new file, to save the downloaded file
+        val mFileName: String = "${selectedBookViewModel.getSelectedBook().value!!.id}"
+        val file = File(myDir, mFileName)
 
-        queueID = downloadManager.enqueue(request)
+        val fileOutput = FileOutputStream(file)
 
+        // Stream used for reading the data from the internet
+        val inputStream = urlConnection.inputStream
 
-        //var uri = "https://www.istockphoto.com/photo/skyline-of-downtown-philadelphia-at-sunset-gm913241978-251392262"
+        // this is the total size of the file which we are downloading
+        totalSize = urlConnection.contentLength
 
-        //downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-//        var request = DownloadManager.Request(Uri.parse(uri))
-//        queueID = downloadManager.enqueue(request)
+        // create a buffer...
+        val buffer = ByteArray(1024)
+        var bufferLength = 0
 
-//
-//
-//        var request = DownloadManager.Request(
-//            uri
-//        )
-//            .setTitle(bookID.toString())
-//            .setDescription(bookID.toString() + " is Downloading")
-//            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-//            .setAllowedOverMetered(true)
-//
-//        var dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-//        queueID = dm.enqueue(request)
-//
+        while (inputStream.read(buffer).also { bufferLength = it } > 0) {
+            fileOutput.write(buffer, 0, bufferLength)
+            downloadedSize += bufferLength
+            // update the progressbar //
 
+        }
+        // close the output stream when complete //
+        fileOutput.close()
+        //Toast.makeText(this, "Download Complete", Toast.LENGTH_LONG).show()
 
-
-//        var request = DownloadManager.Request(Uri.parse(uri))
-//        var title = URLUtil.guessFileName(uri, null,null)
-//        request.setTitle(title)
-//        request.setDescription("Downloading..... ")
-//        var cookie = CookieManager.getInstance().getCookie(uri)
-//        request.addRequestHeader("cookie",cookie)
-//        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-//
-//        downloadArray.append(bookID, 0)
-//        Log.d("sparseArray", downloadArray.toString())
-//
-//        var downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-//        downloadManager.enqueue(request)
-
-        Toast.makeText(this, "Download Starting", Toast.LENGTH_LONG).show()
-//
-//
-
-
-
-//
-//        okClient.newCall(okRequest).enqueue(object: Callback{
-//            override fun onFailure(call: Call, e: IOException) {
-//                e.printStackTrace()
-//            }
-//
-//            override fun onResponse(call: Call, response: Response) {
-//                val inputStream = response?.body?.byteStream()
-//                val bitmap = BitmapFactory.decodeStream(inputStream)
-//
-//                Log.d("imageFind", inputStream.toString())
-//                Log.d("imageFind", "Success")
-//
-//            }
-//
-//        })
-
-
-
-
-//
-//
-//        downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-//        //var uri = Uri.parse("https://www.istockphoto.com/photo/skyline-of-downtown-philadelphia-at-sunset-gm913241978-251392262")
-//        var request = DownloadManager.Request(Uri.parse(uri))
-//        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-//        request.setTitle("This Book")
-//        queueID = downloadManager.enqueue(request)
-//        Log.d("whileDownload", request.toString())
-//        Log.d("whileDownload", queueID.toString())
-//
-//        downloadArray.append(bookID, 0)
-//        Log.d("downloadStatus", "The download is complete")
-
-    }
+    })
 
 
 }

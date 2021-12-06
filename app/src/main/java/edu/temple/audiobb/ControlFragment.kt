@@ -9,14 +9,14 @@ import android.widget.ImageButton
 import android.widget.SeekBar
 import android.widget.TextView
 
-
+var nowPlayingTextView: TextView? = null
 class ControlFragment : Fragment() {
 
-    lateinit var playButton : ImageButton
-    lateinit var pauseButton : ImageButton
-    lateinit var stopButton : ImageButton
-    var seekBar : SeekBar? = null
-    var nowPlayingTextView : TextView? = null
+    lateinit var playButton: ImageButton
+    lateinit var pauseButton: ImageButton
+    lateinit var stopButton: ImageButton
+    var seekBar: SeekBar? = null
+
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
@@ -31,7 +31,7 @@ class ControlFragment : Fragment() {
         seekBar = layout.findViewById(R.id.seekBar)
         nowPlayingTextView = layout.findViewById(R.id.nowPlayingTextView)
 
-        seekBar?.setOnSeekBarChangeListener( object: SeekBar.OnSeekBarChangeListener {
+        seekBar?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
                     (activity as MediaControlInterface).seek(progress)
@@ -75,5 +75,12 @@ class ControlFragment : Fragment() {
         fun pause()
         fun stop()
         fun seek(position: Int)
+    }
+
+    companion object {
+
+        fun setNowPlaying(title: String) {
+            nowPlayingTextView?.text = title
+        }
     }
 }
